@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Private Photo Vault</title>
+<style>
+  :root {
+    --bg: #111; --card: #1c1c1e; --accent: #5e5ce6;
+    --red: #ff453a; --text: #f5f5f7; --muted: #8e8e93;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; font-family: sans-serif; }
+  body { background: var(--bg); color: var(--text); min-height: 100dvh; }
+
+  /* Lock Screen */
+  #lockScreen {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 100dvh; gap: 20px;
+  }
+  .lock-input {
+    padding: 16px; border-radius: 12px; border: 2px solid #333;
+    background: var(--card); color: var(--text); font-size: 18px; text-align: center;
+    letter-spacing: 6px; outline: none;
+  }
+  .lock-btn {
+    padding: 16px 32px; border: none; border-radius: 12px;
+    background: var(--accent); color: #fff; font-size: 16px; cursor: pointer;
+  }
+
+  /* Vault UI */
+  #vaultContent { display: none; padding: 20px; }
+  .header { display: flex; justify-content: space-between; margin-bottom: 20px; }
+  
+  .gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .gallery img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; }
+  
+  .fab {
+    position: fixed; bottom: 30px; right: 30px; width: 60px; height: 60px;
+    background: var(--accent); color: white; border: none; border-radius: 50%;
+    font-size: 30px; cursor: pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+  }
+</style>
+</head>
+<body>
+
+<!-- Lock Screen -->
+<div id="lockScreen">
+  <h2>🔒 Photo Vault</h2>
+  <p id="lockSubtext">Create a PIN to protect your vault</p>
+  <input class="lock-input" id="pinInput" type="password" placeholder="••••" autocomplete="off">
+  <button class="lock-btn" onclick="handleLock()">Unlock / Set PIN</button>
+  <p id="lockError" style="color: var(--red);"></p>
+</div>
+
+<!-- Vault Content -->
+<div id="vaultContent">
+  <div class="header">
+    <h2>My Vault</h2>
+    <button onclick="lockVault()" style="padding:8px 16px; border-radius:8px; border:none; cursor:pointer;">Lock</button>
+  </div>
+  
+  <div class="gallery" id="galleryContainer"></div>
+  
+  <button class="fab" onclick="document.getElementById('fileInput').click()">+</button>
+  <input type="file" id="fileInput" accept="image/*,video/*" multiple style="display:none" onchange="handleFiles(this.files)">
+</div>
+
+<script>
+// --- Secure PIN System ---
+async function hashPin(pin) {
+  const enc = new TextEncoder().encode(pin + 'salt_2024');
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function handleLock() {
+  const input = document.getElementById('pinInput');
+  const error = document.getElementById('lockError');
+  const pin = input.value.trim();
+  
+  if (pin.length < 4) return error.textContent = 'PIN must be at least 4 digits';
+
+  const savedPin = localStorage.getItem('vault_pin');
+  
+  if (!savedPin) { // Setup new PIN
+    localStorage.setItem('vault_pin', await hashPin(pin));
+    unlockVault();
+  } else { // Verify PIN
+    if (await hashPin(pin) === savedPin) unlockVault();
+    else error.textContent = 'Incorrect PIN';
+  }
+  input.value = '';
+}
+
+function unlockVault() {
+  document.getElementById('lockScreen').style.display = 'none';
+  document.getElementById('vaultContent').style.display = 'block';
+  loadMedia();
+}
+
+function lockVault() {
+  document.getElementById('vaultContent').style.display = 'none';
+  document.getElementById('lockScreen').style.display = 'flex';
+  document.getElementById('lockError').textContent = '';
+}
+
+// --- IndexedDB Local Storage ---
+const DB_NAME = 'PhotoVaultDB';
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('media', { keyPath: 'id' });
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function loadMedia() {
+  const db = await openDB();
+  const tx = db.transaction('media', 'readonly');
+  const items = await new Promise(res => {
+    const req = tx.objectStore('media').getAll();
+    req.onsuccess = () => res(req.result);
+  });
+  
+  const container = document.getElementById('galleryContainer');
+  container.innerHTML = items.map(item => {
+    const url = URL.createObjectURL(item.blob);
+    return `<img src="${url}" alt="saved image">`;
+  }).join('');
+}
+
+async function handleFiles(files) {
+  const db = await openDB();
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) continue;
+    const tx = db.transaction('media', 'readwrite');
+    tx.objectStore('media').put({ id: Date.now() + Math.random(), blob: file });
+  }
+  document.getElementById('fileInput').value = '';
+  loadMedia(); // Refresh gallery
+}
+</script>
+</body>
+</html>
